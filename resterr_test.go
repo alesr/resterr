@@ -124,16 +124,19 @@ func TestHandle(t *testing.T) {
 		name               string
 		givenErr           error
 		expectedStatusCode int
+		expectedLogLvl     string
 	}{
 		{
 			name:               "mapped error",
 			givenErr:           errFoo,
 			expectedStatusCode: http.StatusTeapot,
+			expectedLogLvl:     "INFO",
 		},
 		{
 			name:               "unmapped error",
 			givenErr:           errors.New("qux error"),
 			expectedStatusCode: http.StatusInternalServerError,
+			expectedLogLvl:     "ERROR",
 		},
 	}
 
@@ -173,7 +176,7 @@ func TestHandle(t *testing.T) {
 			}
 
 			assert.True(t, strings.Contains(logData, tc.givenErr.Error()))
-			assert.True(t, strings.Contains(logData, "level=INFO"))
+			assert.True(t, strings.Contains(logData, tc.expectedLogLvl))
 		})
 	}
 }

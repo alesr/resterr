@@ -81,12 +81,12 @@ func NewHandler(logger *slog.Logger, errorMap map[error]RESTErr, opts ...Option)
 // provided at initialization. If the error is present in the map, it writes the REST error as JSON.
 // Otherwise, it writes a JSON indicating an internal server error.
 func (h *Handler) Handle(ctx context.Context, w http.ResponseWriter, err error) {
-	h.logger.Info("Handling error.", slog.String("error", err.Error()))
-
 	w.Header().Set("Content-Type", "application/json")
 
 	for k, v := range h.errorMap {
 		if errors.Is(err, k) {
+			h.logger.InfoContext(ctx, "Handling API error.", slog.String("source-error", err.Error()))
+
 			w.WriteHeader(v.StatusCode)
 			if _, err := w.Write(v.json); err != nil {
 				h.logger.ErrorContext(ctx, "Failed to write JSON error.", slog.String("error", err.Error()))
@@ -95,6 +95,8 @@ func (h *Handler) Handle(ctx context.Context, w http.ResponseWriter, err error) 
 			return
 		}
 	}
+
+	h.logger.ErrorContext(ctx, "Handling unmapped error.", slog.String("source-error", err.Error()))
 	h.writeInternalErr(ctx, w)
 }
 
