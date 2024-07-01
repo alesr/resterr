@@ -4,19 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+var logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
+
 func TestNewHandler(t *testing.T) {
 	t.Parallel()
-
-	givenLogger := slog.Default()
 
 	errFoo := errors.New("foo err")
 	errBar := errors.New("bar err")
@@ -35,7 +37,7 @@ func TestNewHandler(t *testing.T) {
 	t.Run("without options", func(t *testing.T) {
 		t.Parallel()
 
-		observed, err := NewHandler(givenLogger, givenErrorMap)
+		observed, err := NewHandler(logger, givenErrorMap)
 		require.NoError(t, err)
 
 		assert.NotEmpty(t, observed.logger)
@@ -87,16 +89,22 @@ func TestNewHandler(t *testing.T) {
 		}
 
 		for _, tc := range testCases {
-			_, err := NewHandler(givenLogger, givenErrorMap, tc.givenValidationFn)
+			_, err := NewHandler(logger, givenErrorMap, tc.givenValidationFn)
 			assert.ErrorIs(t, err, tc.expectedErr)
 		}
 	})
 }
 
+type mockLogWriter struct {
+	writeFunc func(p []byte) (n int, err error)
+}
+
+func (m *mockLogWriter) Write(p []byte) (n int, err error) {
+	return m.writeFunc(p)
+}
+
 func TestHandle(t *testing.T) {
 	t.Parallel()
-
-	logger := slog.Default()
 
 	errFoo := errors.New("foo err")
 	errBar := errors.New("bar err")
@@ -133,14 +141,23 @@ func TestHandle(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			var logData string
+
+			logWriter := mockLogWriter{
+				writeFunc: func(p []byte) (n int, err error) {
+					logData = string(p)
+					return 0, nil
+				},
+			}
+
+			logger := slog.New(slog.NewTextHandler(&logWriter, nil))
+
 			handler, err := NewHandler(logger, errorMap)
 			require.NoError(t, err)
 
 			payload := httptest.NewRecorder()
 
 			handler.Handle(context.TODO(), payload, tc.givenErr)
-
-			// TODO(alesr): assert log messages, level and context
 
 			assert.Equal(t, tc.expectedStatusCode, payload.Result().StatusCode)
 			assert.Equal(t, "application/json", payload.Result().Header["Content-Type"][0])
@@ -154,9 +171,11 @@ func TestHandle(t *testing.T) {
 			} else {
 				assert.Equal(t, expectedErr, result)
 			}
+
+			assert.True(t, strings.Contains(logData, tc.givenErr.Error()))
+			assert.True(t, strings.Contains(logData, "level=INFO"))
 		})
 	}
-
 }
 
 func TestWriteInternalErr(t *testing.T) {
