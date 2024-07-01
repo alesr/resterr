@@ -22,6 +22,14 @@ type RESTErr struct {
 	json       []byte `json:"-"`
 }
 
+// Error implements the error interface.
+func (r RESTErr) Error() string {
+	return fmt.Sprintf(
+		"status code: '%d', message: %s', json: '%s'",
+		r.StatusCode, r.Message, string(r.json),
+	)
+}
+
 // Handler handles standard errors by logging them and looking for an equivalent REST error in the error map.
 // Errors that are not mapped result in internal server errors.
 type Handler struct {
@@ -83,15 +91,17 @@ func NewHandler(logger *slog.Logger, errorMap map[error]RESTErr, opts ...Option)
 func (h *Handler) Handle(ctx context.Context, w http.ResponseWriter, err error) {
 	w.Header().Set("Content-Type", "application/json")
 
+	var restErr RESTErr
+	if errors.As(err, &restErr) {
+		h.logger.ErrorContext(ctx, "Handling REST error.", slog.String("error", err.Error()))
+		h.write(ctx, w, restErr)
+		return
+	}
+
 	for k, v := range h.errorMap {
 		if errors.Is(err, k) {
-			h.logger.InfoContext(ctx, "Handling API error.", slog.String("source-error", err.Error()))
-
-			w.WriteHeader(v.StatusCode)
-			if _, err := w.Write(v.json); err != nil {
-				h.logger.ErrorContext(ctx, "Failed to write JSON error.", slog.String("error", err.Error()))
-				h.writeInternalErr(ctx, w)
-			}
+			h.logger.ErrorContext(ctx, "Handling mapped error.", slog.String("error", err.Error()))
+			h.write(ctx, w, *v)
 			return
 		}
 	}
@@ -100,10 +110,18 @@ func (h *Handler) Handle(ctx context.Context, w http.ResponseWriter, err error) 
 	h.writeInternalErr(ctx, w)
 }
 
-// writeInternalErr writes an internal server error JSON response and logs any errors that occur while writing.
 func (h *Handler) writeInternalErr(ctx context.Context, w http.ResponseWriter) {
 	w.WriteHeader(http.StatusInternalServerError)
 	if _, err := w.Write(h.internalErrJSON); err != nil {
 		h.logger.ErrorContext(ctx, "Failed to write internal JSON error.", slog.String("error", err.Error()))
+	}
+}
+
+func (h *Handler) write(ctx context.Context, w http.ResponseWriter, e RESTErr) {
+
+	w.WriteHeader(e.StatusCode)
+	if _, err := w.Write(e.json); err != nil {
+		h.logger.ErrorContext(ctx, "Failed to write JSON error.", slog.String("source-error", e.Error()), slog.String("error", err.Error()))
+		h.writeInternalErr(ctx, w)
 	}
 }
