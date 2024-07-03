@@ -118,9 +118,30 @@ func (h *Handler) writeInternalErr(ctx context.Context, w http.ResponseWriter) {
 }
 
 func (h *Handler) write(ctx context.Context, w http.ResponseWriter, e RESTErr) {
-
 	w.WriteHeader(e.StatusCode)
-	if _, err := w.Write(e.json); err != nil {
+
+	// It's likely that we'll be handling mapped or unmapped errors.
+	// And they come with the JSON bytes, as in opposition when RESTErr
+	// errors are passed directly to the handler.
+	payload := e.json
+
+	var err error
+
+	if e.json == nil {
+		payload, err = json.Marshal(e)
+		if err != nil {
+			h.logger.ErrorContext(
+				ctx,
+				"Failed to marshal error during write",
+				slog.String("source-error", e.Error()),
+				slog.String("error", err.Error()),
+			)
+			h.writeInternalErr(ctx, w)
+			return
+		}
+	}
+
+	if _, err := w.Write(payload); err != nil {
 		h.logger.ErrorContext(ctx, "Failed to write JSON error.", slog.String("source-error", e.Error()), slog.String("error", err.Error()))
 		h.writeInternalErr(ctx, w)
 	}
