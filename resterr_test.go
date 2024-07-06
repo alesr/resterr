@@ -96,11 +96,21 @@ func TestNewHandler(t *testing.T) {
 }
 
 type mockLogWriter struct {
-	writeFunc func(p []byte) (n int, err error)
+	writeFunc       func(p []byte) (n int, err error)
+	writeHeaderFunc func(statusCode int)
+	headerFunc      func() http.Header
 }
 
 func (m *mockLogWriter) Write(p []byte) (n int, err error) {
 	return m.writeFunc(p)
+}
+
+func (m *mockLogWriter) WriteHeader(statusCode int) {
+	m.writeHeaderFunc(statusCode)
+}
+
+func (m *mockLogWriter) Header() http.Header {
+	return m.headerFunc()
 }
 
 func TestHandle(t *testing.T) {
@@ -125,18 +135,34 @@ func TestHandle(t *testing.T) {
 		givenErr           error
 		expectedStatusCode int
 		expectedLogLvl     string
+		expectedErr        RESTErr
 	}{
 		{
 			name:               "mapped error",
 			givenErr:           errFoo,
 			expectedStatusCode: http.StatusTeapot,
 			expectedLogLvl:     "INFO",
+			expectedErr:        errorMap[errFoo],
 		},
 		{
 			name:               "unmapped error",
 			givenErr:           errors.New("qux error"),
 			expectedStatusCode: http.StatusInternalServerError,
 			expectedLogLvl:     "ERROR",
+			expectedErr:        internalErr,
+		},
+		{
+			name: "RESTErr sent directly to handler",
+			givenErr: RESTErr{
+				StatusCode: http.StatusEarlyHints,
+				Message:    "message",
+			},
+			expectedStatusCode: http.StatusEarlyHints,
+			expectedLogLvl:     "INFO",
+			expectedErr: RESTErr{
+				StatusCode: http.StatusEarlyHints,
+				Message:    "message",
+			},
 		},
 	}
 
@@ -158,22 +184,17 @@ func TestHandle(t *testing.T) {
 			handler, err := NewHandler(logger, errorMap)
 			require.NoError(t, err)
 
-			payload := httptest.NewRecorder()
+			writer := httptest.NewRecorder()
 
-			handler.Handle(context.TODO(), payload, tc.givenErr)
+			handler.Handle(context.TODO(), writer, tc.givenErr)
 
-			assert.Equal(t, tc.expectedStatusCode, payload.Result().StatusCode)
-			assert.Equal(t, "application/json", payload.Result().Header["Content-Type"][0])
+			assert.Equal(t, tc.expectedStatusCode, writer.Result().StatusCode)
+			assert.Equal(t, "application/json", writer.Result().Header["Content-Type"][0])
 
 			var result RESTErr
-			require.NoError(t, json.NewDecoder(payload.Result().Body).Decode(&result))
+			require.NoError(t, json.NewDecoder(writer.Result().Body).Decode(&result))
 
-			expectedErr, mapped := errorMap[tc.givenErr]
-			if !mapped {
-				assert.Equal(t, internalErr, result)
-			} else {
-				assert.Equal(t, expectedErr, result)
-			}
+			assert.Equal(t, tc.expectedErr, result)
 
 			assert.True(t, strings.Contains(logData, tc.givenErr.Error()))
 			assert.True(t, strings.Contains(logData, tc.expectedLogLvl))
@@ -197,4 +218,73 @@ func TestWriteInternalErr(t *testing.T) {
 	require.NoError(t, json.NewDecoder(payload.Result().Body).Decode(&result))
 
 	assert.Equal(t, internalErr, result)
+}
+
+func TestWrite(t *testing.T) {
+	t.Parallel()
+
+	errWithJSON := RESTErr{
+		StatusCode: 123,
+		Message:    "foo-message",
+	}
+
+	b, err := json.Marshal(errWithJSON)
+	require.NoError(t, err)
+
+	errWithJSON.json = b
+
+	errWithoutJSON := RESTErr{
+		StatusCode: 456,
+		Message:    "bar-message",
+	}
+
+	bb, err := json.Marshal(errWithoutJSON)
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name         string
+		givenErr     RESTErr
+		expectedJSON []byte
+	}{
+		{
+			name:         "error contain pre-compiled JSON",
+			givenErr:     errWithJSON,
+			expectedJSON: b,
+		},
+		{
+			name:         "error does not contain pre-compiled JSON",
+			givenErr:     errWithoutJSON,
+			expectedJSON: bb,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var (
+				writeHeaderCalled bool
+				writeCalled       bool
+			)
+
+			w := mockLogWriter{
+				writeHeaderFunc: func(statusCode int) {
+					writeHeaderCalled = true
+					assert.Equal(t, tc.givenErr.StatusCode, statusCode)
+				},
+				writeFunc: func(p []byte) (n int, err error) {
+					writeCalled = true
+					assert.Equal(t, tc.expectedJSON, p)
+					return 0, nil
+				},
+			}
+
+			h := Handler{}
+
+			h.write(context.TODO(), &w, tc.givenErr)
+
+			require.True(t, writeHeaderCalled)
+			require.True(t, writeCalled)
+		})
+	}
 }
