@@ -33,11 +33,11 @@ func WithValidationFn(fn func(restErr RESTErr) error) Option {
 var logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 
 // NewHandler returns a REST error handler.
-// It pre-processes the REST errors' JSON values.
+// It pre-processes the JSON values for REST errors.
 func NewHandler(logger *slog.Logger, errMap map[error]RESTErr, opts ...Option) (*Handler, error) {
 	internalErrJSON, err := json.Marshal(internalErr)
 	if err != nil {
-		return nil, fmt.Errorf("could not marshal internal err: %w", err)
+		return nil, fmt.Errorf("could not marshal internal error: %w", err)
 	}
 
 	h := Handler{
@@ -68,7 +68,7 @@ func NewHandler(logger *slog.Logger, errMap map[error]RESTErr, opts ...Option) (
 	return &h, nil
 }
 
-// Writer defines the interface for writing the error data.
+// Writer defines the interface for writing error data.
 type Writer interface {
 	Write([]byte) (int, error)
 	WriteHeader(statusCode int)
@@ -130,7 +130,7 @@ func (h *Handler) write(ctx context.Context, w Writer, e RESTErr) {
 	w.WriteHeader(e.StatusCode)
 
 	// It's likely that we'll be handling mapped or unmapped errors.
-	// And they come with the JSON bytes, as in opposition when RESTErr
+	// They come with JSON bytes, as opposed to when RESTErr
 	// errors are passed directly to the handler.
 	payload := e.json
 
